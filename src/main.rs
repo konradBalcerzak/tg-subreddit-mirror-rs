@@ -1,13 +1,17 @@
+mod settings;
+use roux::Reddit;
+use settings::Settings;
 use teloxide::prelude::*;
 
 #[tokio::main]
 async fn main() {
-    pretty_env_logger::init();
-    let bot = Bot::from_env();
-
-    teloxide::repl(bot, |bot: Bot, msg: Message| async move {
-        bot.send_dice(msg.chat.id).await?;
-        Ok(())
-    })
-    .await;
+    let app_settings = Settings::new()
+        .expect("Program crashed");
+    let reddit_client = Reddit::new(&app_settings.reddit.client.user_agent, &app_settings.reddit.client.id, &app_settings.reddit.client.secret)
+        .username(&app_settings.reddit.account.username)
+        .username(&app_settings.reddit.account.password)
+        .login()
+        .await
+        .expect("Program crashed");
+    
 }
