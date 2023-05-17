@@ -1,2 +1,4 @@
 /target
+.env
+*.db
 tg-subreddit-mirror.toml
