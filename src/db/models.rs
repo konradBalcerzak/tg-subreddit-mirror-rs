@@ -1,7 +1,7 @@
 use diesel::prelude::*;
-use crate::schema::*;
+use super::schema::*;
 
-#[derive(Queryable, Identifiable)]
+#[derive(Queryable, Identifiable, Clone)]
 #[diesel(table_name = channel)]
 pub struct Channel {
     pub id: i32,
