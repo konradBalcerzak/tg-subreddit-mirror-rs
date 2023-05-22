@@ -1,64 +1,104 @@
-use teloxide::{dispatching::UpdateHandler, prelude::*};
+use super::{AppDialogue, Command, DispatcherSchema, State as GlobalState, TeloxideResult};
+use crate::db::models::Channel;
+use teloxide::{dptree::case, prelude::*};
 
-use super::{AppDialogue, DialogueState, TeloxideResult};
+mod listeners {
+    use super::*;
+    pub(super) async fn on_sub_link(
+        _: Bot,
+        dialogue: Dialogue<GlobalState, AppDialogue>,
+        _: Message,
+    ) -> TeloxideResult {
+        dialogue
+            .update(GlobalState::Subreddit(State::SubLinkRecieveChannel))
+            .await?;
+        Ok(())
+    }
 
-pub fn subreddit_schema() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync + 'static>> {
-    use dptree::case;
-    dptree::entry()
-        .branch(case![DialogueState::SubLinkRecieveChannel])
-        .endpoint(on_sub_link_channel)
-        .branch(case![DialogueState::SubLinkRecieveSub(channel)])
-        .endpoint(on_sub_link_sub)
-        .branch(case![DialogueState::SubUnlinkRecieveChannel])
-        .endpoint(on_sub_unlink_channel)
-        .branch(case![DialogueState::SubUnlinkRecieveSub(channel)])
-        .endpoint(on_sub_unlink_sub)
+    pub(super) async fn on_sub_link_channel(
+        _: Bot,
+        dialogue: Dialogue<GlobalState, AppDialogue>,
+        _: Message,
+    ) -> TeloxideResult {
+        dialogue
+            .update(GlobalState::Subreddit(State::SubLinkRecieveChannel))
+            .await?;
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_link_sub(
+        _: Bot,
+        dialogue: Dialogue<GlobalState, AppDialogue>,
+        _: Message,
+    ) -> TeloxideResult {
+        dialogue.update(GlobalState::MainMenu).await?;
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_unlink(
+        _: Bot,
+        dialogue: Dialogue<GlobalState, AppDialogue>,
+        _: Message,
+    ) -> TeloxideResult {
+        dialogue
+            .update(GlobalState::Subreddit(State::SubUnlinkRecieveChannel))
+            .await?;
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_unlink_channel(
+        _: Bot,
+        dialogue: Dialogue<GlobalState, AppDialogue>,
+        _: Message,
+    ) -> TeloxideResult {
+        dialogue
+            .update(GlobalState::Subreddit(State::SubUnlinkRecieveChannel))
+            .await?;
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_unlink_sub(
+        _: Bot,
+        dialogue: Dialogue<GlobalState, AppDialogue>,
+        _: Message,
+    ) -> TeloxideResult {
+        dialogue.update(GlobalState::MainMenu).await?;
+        Ok(())
+    }
 }
 
-pub async fn on_sub_link(
-    _: Bot,
-    _: Dialogue<DialogueState, AppDialogue>,
-    _: Message,
-) -> TeloxideResult {
-    todo!()
+#[derive(Clone)]
+pub(super) enum State {
+    SubLinkRecieveChannel,
+    SubLinkRecieveSub(Channel),
+    SubUnlinkRecieveChannel,
+    SubUnlinkRecieveSub(Channel),
 }
 
-pub async fn on_sub_link_channel(
-    _: Bot,
-    _: Dialogue<DialogueState, AppDialogue>,
-    _: Message,
-) -> TeloxideResult {
-    todo!()
-}
-
-async fn on_sub_link_sub(
-    _: Bot,
-    _: Dialogue<DialogueState, AppDialogue>,
-    _: Message,
-) -> TeloxideResult {
-    todo!()
-}
-
-pub async fn on_sub_unlink(
-    _: Bot,
-    _: Dialogue<DialogueState, AppDialogue>,
-    _: Message,
-) -> TeloxideResult {
-    todo!()
-}
-
-pub async fn on_sub_unlink_channel(
-    _: Bot,
-    _: Dialogue<DialogueState, AppDialogue>,
-    _: Message,
-) -> TeloxideResult {
-    todo!()
-}
-
-async fn on_sub_unlink_sub(
-    _: Bot,
-    _: Dialogue<DialogueState, AppDialogue>,
-    _: Message,
-) -> TeloxideResult {
-    todo!()
+pub fn schema() -> DispatcherSchema {
+    Update::filter_message()
+        .branch(
+            case![GlobalState::MainMenu]
+                .filter_command::<Command>()
+                .branch(case![Command::LinkSubreddit].endpoint(listeners::on_sub_link))
+                .branch(case![Command::UnlinkSubreddit].endpoint(listeners::on_sub_unlink)),
+        )
+        .branch(
+            case![GlobalState::Subreddit(x)]
+                .branch(
+                    case![State::SubLinkRecieveChannel].endpoint(listeners::on_sub_link_channel),
+                )
+                .branch(
+                    case![State::SubLinkRecieveSub(selected_channel)]
+                        .endpoint(listeners::on_sub_link_sub),
+                )
+                .branch(
+                    case![State::SubUnlinkRecieveChannel]
+                        .endpoint(listeners::on_sub_unlink_channel),
+                )
+                .branch(
+                    case![State::SubLinkRecieveSub(selected_channel)]
+                        .endpoint(listeners::on_sub_unlink_sub),
+                ),
+        )
 }

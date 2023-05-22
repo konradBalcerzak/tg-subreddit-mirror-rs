@@ -21,6 +21,14 @@ pub struct NewChannel<'a> {
     pub invite_link: Option<&'a str>,
 }
 
+impl<'a> NewChannel<'a> {
+    pub fn insert(self, conn: &mut SqliteConnection) -> QueryResult<Channel> {
+        use crate::db::schema::channel::dsl::*;
+        diesel::insert_into(channel).values(&self).execute(conn)?;
+        channel.order(id.desc()).first(conn)
+    }
+}
+
 #[derive(Queryable, Identifiable)]
 #[diesel(table_name = subreddit)]
 pub struct Subreddit {
