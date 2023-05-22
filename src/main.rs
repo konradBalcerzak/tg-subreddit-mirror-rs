@@ -1,12 +1,13 @@
-mod settings;
 mod db;
+mod settings;
 mod teloxide;
 
-use diesel_migrations::{embed_migrations, EmbeddedMigrations};
-// use roux::Reddit;
 use crate::teloxide::setup_teloxide;
+use diesel_migrations::{embed_migrations, EmbeddedMigrations};
+use roux::Reddit;
+use settings::SETTINGS_INSTANCE;
 
-pub const MIGRATIONS: EmbeddedMigrations  = embed_migrations!();
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 #[tokio::main]
 async fn main() {

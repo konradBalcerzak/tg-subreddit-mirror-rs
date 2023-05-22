@@ -16,7 +16,7 @@ pub(self) enum State {
     #[default]
     MainMenu,
     Channel(channel::State),
-    Subreddit(subreddit::State),
+    Sub(subreddit::State),
 }
 
 #[derive(BotCommands, Clone)]

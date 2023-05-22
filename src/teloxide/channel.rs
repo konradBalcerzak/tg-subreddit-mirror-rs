@@ -5,30 +5,25 @@ use diesel::SqliteConnection;
 use std::sync::{Arc, Mutex};
 use teloxide::prelude::*;
 
-mod helpers {
+pub mod helpers {
     use super::*;
     use std::error::Error;
 
-    pub(super) fn channel_list_message(
+    pub(crate) fn channel_list_message(
         channels: Vec<Channel>,
     ) -> Result<String, Box<dyn Error + Send + Sync + 'static>> {
         let mut message_content = String::new();
         for available_channel in channels {
             message_content += format!(
                 "Channel name: {}\nChannel id: {}\n\n",
-                if let Some(uname) = available_channel.username {
-                    uname
-                } else {
-                    String::from("(No channel name found)")
-                },
-                available_channel.chat_id
+                available_channel.title, available_channel.chat_id
             )
             .as_str();
         }
         Ok(message_content)
     }
 
-    pub(super) async fn get_channels_where_admins(
+    pub(crate) async fn get_channels_where_admins(
         bot: &Bot,
         conn: Arc<Mutex<SqliteConnection>>,
         user_id: &UserId,
@@ -63,7 +58,7 @@ mod listeners {
     use super::*;
     use crate::{
         db::models::NewChannel,
-        teloxide::{AppDialogue, State as GlobalState, TeloxideResult},
+        teloxide::{AppDialogue, State as SupState, TeloxideResult},
     };
     use teloxide::{
         types::{Me, Message},
@@ -72,21 +67,21 @@ mod listeners {
 
     pub(super) async fn on_channel_link(
         bot: Bot,
-        dialogue: Dialogue<GlobalState, AppDialogue>,
+        dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
     ) -> TeloxideResult {
         bot.send_message(msg.chat.id, "Got it. Forward a message from the channel here.\n Remember that this bot needs to be an administrator in that channel first.")
         .reply_to_message_id(msg.id)
         .await?;
         dialogue
-            .update(GlobalState::Channel(State::LinkRecieveChannel))
+            .update(SupState::Channel(State::LinkRecieveChannel))
             .await?;
         Ok(())
     }
 
     pub(super) async fn on_channel_link_msg(
         bot: Bot,
-        dialogue: Dialogue<GlobalState, AppDialogue>,
+        dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
         me: Me,
         conn: Arc<Mutex<SqliteConnection>>,
@@ -136,21 +131,17 @@ mod listeners {
             msg.chat.id,
             format!(
                 "Added the channel {} (id: {}). Now you can add subreddits to this channel.",
-                new_channel
-                    .username
-                    .or(new_channel.invite_link)
-                    .unwrap_or_default(),
-                new_channel.chat_id
+                new_channel.title, new_channel.chat_id
             ),
         )
         .await?;
-        dialogue.update(GlobalState::MainMenu).await?;
+        dialogue.update(SupState::MainMenu).await?;
         return Ok(());
     }
 
     pub(super) async fn on_channel_unlink(
         bot: Bot,
-        dialogue: Dialogue<GlobalState, AppDialogue>,
+        dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
         me: Me,
         conn: Arc<Mutex<SqliteConnection>>,
@@ -173,14 +164,14 @@ mod listeners {
             .reply_to_message_id(msg.id)
             .await?;
         dialogue
-            .update(GlobalState::Channel(State::UnlinkRecieveChannel))
+            .update(SupState::Channel(State::UnlinkRecieveChannel))
             .await?;
         Ok(())
     }
 
     pub(super) async fn on_channel_unlink_msg(
         bot: Bot,
-        dialogue: Dialogue<GlobalState, AppDialogue>,
+        dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
         conn: Arc<Mutex<SqliteConnection>>,
     ) -> TeloxideResult {
@@ -214,22 +205,37 @@ mod listeners {
                 return Ok(());
             }
         };
+        bot.send_message(
+            msg.chat.id,
+            format!(
+                "Are you sure you want to remove channel \"{}\" (Id: {})? Type the channel title to remove it",
+                selected_channel.title, selected_channel.chat_id
+            ),
+        )
+        .reply_to_message_id(msg.id)
+        .await?;
         dialogue
-            .update(GlobalState::Channel(State::UnlinkConfirm(selected_channel)))
+            .update(SupState::Channel(State::UnlinkConfirm(selected_channel)))
             .await?;
         Ok(())
     }
 
     pub(super) async fn on_channel_unlink_confirm(
         bot: Bot,
-        dialogue: Dialogue<GlobalState, AppDialogue>,
+        dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
         conn: Arc<Mutex<SqliteConnection>>,
         selected_channel: Channel,
     ) -> TeloxideResult {
         use crate::db::schema::channel::dsl::*;
         use diesel::prelude::*;
-
+        if msg.text().unwrap_or("") != selected_channel.title {
+            bot.send_message(msg.chat.id, "Cancelled unlinking channel.")
+                .reply_to_message_id(msg.id)
+                .await?;
+            dialogue.update(SupState::MainMenu).await?;
+            return Ok(());
+        }
         let deleted_rows = diesel::delete(channel)
             .filter(chat_id.eq(selected_channel.chat_id))
             .execute(&mut *conn.lock().unwrap())?;
@@ -243,7 +249,7 @@ mod listeners {
         )
         .reply_to_message_id(msg.id)
         .await?;
-        dialogue.update(GlobalState::MainMenu).await?;
+        dialogue.update(SupState::MainMenu).await?;
         Ok(())
     }
 
@@ -279,19 +285,19 @@ pub enum State {
 }
 
 pub fn schema() -> DispatcherSchema {
-    use super::{Command, State as GlobalState};
+    use super::{Command, State as SupState};
     use teloxide::dptree::case;
     use teloxide::prelude::*;
     Update::filter_message()
         .branch(
-            case![GlobalState::MainMenu]
+            case![SupState::MainMenu]
                 .filter_command::<Command>()
                 .branch(case![Command::ListChannels].endpoint(listeners::on_channel_list))
                 .branch(case![Command::LinkChannel].endpoint(listeners::on_channel_link))
                 .branch(case![Command::UnlinkChannel].endpoint(listeners::on_channel_unlink)),
         )
         .branch(
-            case![GlobalState::Channel(x)]
+            case![SupState::Channel(x)]
                 .branch(case![State::LinkRecieveChannel].endpoint(listeners::on_channel_link_msg))
                 .branch(
                     case![State::UnlinkRecieveChannel].endpoint(listeners::on_channel_unlink_msg),
