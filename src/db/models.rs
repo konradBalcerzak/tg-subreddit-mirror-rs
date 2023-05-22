@@ -1,20 +1,30 @@
-use diesel::prelude::*;
 use super::schema::*;
+use diesel::prelude::*;
 
-#[derive(Queryable, Identifiable, Clone)]
+#[derive(Queryable, Selectable, Identifiable, Clone)]
 #[diesel(table_name = channel)]
 pub struct Channel {
-    pub id: i32,
+    pub id: Option<i32>,
+    pub chat_id: i64,
     pub disabled: bool,
     pub title: String,
     pub username: Option<String>,
     pub invite_link: Option<String>,
 }
 
+#[derive(Insertable)]
+#[diesel(table_name = channel)]
+pub struct NewChannel<'a> {
+    pub chat_id: i64,
+    pub title: &'a str,
+    pub username: Option<&'a str>,
+    pub invite_link: Option<&'a str>,
+}
+
 #[derive(Queryable, Identifiable)]
 #[diesel(table_name = subreddit)]
 pub struct Subreddit {
-    pub id: i32,
+    pub id: Option<i32>,
     pub disabled: bool,
     pub subreddit_id: String,
     pub name: String,
@@ -33,7 +43,7 @@ pub struct Subreddit {
 #[diesel(belongs_to(Subreddit))]
 #[diesel(table_name = channel_subreddit)]
 pub struct ChannelSubreddit {
-    pub id: i32,
+    pub id: Option<i32>,
     pub channel_id: i32,
     pub subreddit_id: i32,
 }

@@ -3,6 +3,7 @@
 diesel::table! {
     channel (id) {
         id -> Nullable<Integer>,
+        chat_id -> BigInt,
         disabled -> Bool,
         title -> Text,
         username -> Nullable<Text>,

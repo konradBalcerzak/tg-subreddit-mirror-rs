@@ -1,7 +1,7 @@
 mod channel;
 mod subreddit;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use dptree::case;
 use teloxide::{
@@ -30,7 +30,7 @@ pub enum DialogueState {
     rename_rule = "lowercase",
     description = "These commands are supported:"
 )]
-pub enum Command {
+enum Command {
     Help,
     Cancel,
     LinkChannel,
@@ -40,17 +40,17 @@ pub enum Command {
     UnlinkSubreddit,
 }
 
-pub type BotDialogue = Dialogue<DialogueState, dialogue::InMemStorage<DialogueState>>;
-pub type HandlerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub type DispatcherSchema = UpdateHandler<Box<dyn std::error::Error + Send + Sync + 'static>>;
+pub type TeloxideResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+pub type AppDialogue = teloxide::dispatching::dialogue::InMemStorage<DialogueState>;
 
 pub async fn setup_teloxide() {
-    let db = Mutex::new(establish_connection());
+    let conn = Arc::new(Mutex::new(establish_connection()));
     pretty_env_logger::init();
     let bot = Bot::new(&SETTINGS_INSTANCE.teloxide.token);
     let dispatcher = Dispatcher::builder(bot, dispatcher_schema()).dependencies(dptree::deps![
         dialogue::InMemStorage::<DialogueState>::new(),
-        db
+        conn
     ]);
 }
 
@@ -60,7 +60,7 @@ fn dispatcher_schema() -> DispatcherSchema {
 }
 
 fn message_schema() -> DispatcherSchema {
-   Update::filter_message()
+    Update::filter_message()
         .branch(command_schema())
         .branch(channel::channel_schema())
         .branch(subreddit::subreddit_schema())
@@ -77,6 +77,7 @@ fn main_menu_schema() -> DispatcherSchema {
     case![DialogueState::MainMenu]
         .branch(case![Command::LinkChannel].endpoint(channel::on_channel_link))
         .branch(case![Command::UnlinkChannel].endpoint(channel::on_channel_unlink))
+        .branch(case![Command::ListChannels].endpoint(channel::on_channel_list))
         .branch(case![Command::LinkSubreddit].endpoint(subreddit::on_sub_link))
         .branch(case![Command::UnlinkSubreddit].endpoint(subreddit::on_sub_unlink))
 }
@@ -93,10 +94,18 @@ fn help_schema() -> DispatcherSchema {
         .branch(case![DialogueState::SubUnlinkRecieveSub(channel)].endpoint(on_help))
 }
 
-pub async fn on_cancel(_: Bot, _: BotDialogue, _: Message) -> HandlerResult {
+pub async fn on_cancel(
+    _: Bot,
+    _: Dialogue<DialogueState, dialogue::InMemStorage<DialogueState>>,
+    _: Message,
+) -> TeloxideResult {
     todo!()
 }
 
-pub async fn on_help(_: Bot, _: BotDialogue, _: Message) -> HandlerResult {
+pub async fn on_help(
+    _: Bot,
+    _: Dialogue<DialogueState, dialogue::InMemStorage<DialogueState>>,
+    _: Message,
+) -> TeloxideResult {
     todo!()
 }
