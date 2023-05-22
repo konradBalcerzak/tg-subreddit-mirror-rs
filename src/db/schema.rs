@@ -2,7 +2,7 @@
 
 diesel::table! {
     channel (id) {
-        id -> Nullable<Integer>,
+        id -> Integer,
         chat_id -> BigInt,
         disabled -> Bool,
         title -> Text,
@@ -21,7 +21,7 @@ diesel::table! {
 
 diesel::table! {
     subreddit (id) {
-        id -> Nullable<Integer>,
+        id -> Integer,
         disabled -> Bool,
         subreddit_id -> Text,
         name -> Text,
