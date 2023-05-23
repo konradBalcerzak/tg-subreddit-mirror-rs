@@ -3,7 +3,6 @@ use diesel::{
     deserialize::{FromSql, FromSqlRow},
     dsl::count,
     prelude::*,
-    result::Error,
     sql_types::{self, Text},
     sqlite::{Sqlite, SqliteValue},
 };
@@ -27,7 +26,7 @@ impl Channel {
             .filter(channel_dsl::chat_id.eq(chat_id))
             .execute(conn)
     }
-    pub fn get_by_chat_id(chat_id: ChatId, conn: &mut SqliteConnection) -> Result<Channel, Error> {
+    pub fn get_by_chat_id(chat_id: ChatId, conn: &mut SqliteConnection) -> QueryResult<Channel> {
         use crate::db::schema::channel::dsl as channel_dsl;
         channel_dsl::channel
             .filter(channel_dsl::chat_id.eq(&chat_id.0))
@@ -36,7 +35,7 @@ impl Channel {
     pub fn get_by_subreddit(
         related_subreddit: Subreddit,
         conn: &mut SqliteConnection,
-    ) -> Result<Vec<Channel>, Error> {
+    ) -> QueryResult<Vec<Channel>> {
         use crate::db::schema::channel::dsl as channel_dsl;
         use diesel::prelude::*;
         ChannelSubreddit::belonging_to(&related_subreddit)
@@ -121,7 +120,7 @@ impl Subreddit {
     pub fn get_by_sub_id(
         subreddit_id: &String,
         conn: &mut SqliteConnection,
-    ) -> Result<Subreddit, Error> {
+    ) -> QueryResult<Subreddit> {
         use crate::db::schema::subreddit::dsl as sub_dsl;
         sub_dsl::subreddit
             .filter(sub_dsl::subreddit_id.eq(&subreddit_id))
@@ -130,7 +129,7 @@ impl Subreddit {
     pub fn get_by_subreddit_name(
         name: &String,
         conn: &mut SqliteConnection,
-    ) -> Result<Subreddit, Error> {
+    ) -> QueryResult<Subreddit> {
         use crate::db::schema::subreddit::dsl as sub_dsl;
         sub_dsl::subreddit
             .filter(sub_dsl::name.eq(&name))
@@ -139,13 +138,19 @@ impl Subreddit {
     pub fn get_by_channel(
         related_channel: Channel,
         conn: &mut SqliteConnection,
-    ) -> Result<Vec<Subreddit>, Error> {
+    ) -> QueryResult<Vec<Subreddit>> {
         use crate::db::schema::subreddit::dsl as sub_dsl;
         use diesel::prelude::*;
         ChannelSubreddit::belonging_to(&related_channel)
             .inner_join(sub_dsl::subreddit)
             .select(Subreddit::as_select())
             .load(conn)
+    }
+    pub fn delete(subreddit: Subreddit, conn: &mut SqliteConnection) -> QueryResult<usize> {
+        use crate::db::schema::subreddit::dsl as sub_dsl;
+        diesel::delete(sub_dsl::subreddit)
+            .filter(sub_dsl::id.eq(subreddit.id))
+            .execute(conn)
     }
 }
 
@@ -175,11 +180,34 @@ pub struct ChannelSubreddit {
 }
 
 impl ChannelSubreddit {
+    pub fn insert(
+        new_relation: &NewChannelSubreddit,
+        conn: &mut SqliteConnection,
+    ) -> QueryResult<ChannelSubreddit> {
+        use crate::db::schema::channel_subreddit::dsl as channel_sub_dsl;
+        diesel::insert_into(channel_sub_dsl::channel_subreddit)
+            .values(new_relation)
+            .execute(conn)?;
+        channel_sub_dsl::channel_subreddit
+            .order(channel_sub_dsl::id.desc())
+            .first::<ChannelSubreddit>(conn)
+    }
+    pub fn delete(
+        channel: &Channel,
+        subreddit: &Subreddit,
+        conn: &mut SqliteConnection,
+    ) -> QueryResult<usize> {
+        use crate::db::schema::channel_subreddit::dsl as channel_sub_dsl;
+        diesel::delete(channel_sub_dsl::channel_subreddit)
+            .filter(channel_sub_dsl::channel_id.eq(channel.id))
+            .filter(channel_sub_dsl::subreddit_id.eq(subreddit.id))
+            .execute(conn)
+    }
     pub fn are_related(
         channel: &Channel,
         subreddit: &Subreddit,
         conn: &mut SqliteConnection,
-    ) -> Result<bool, Error> {
+    ) -> QueryResult<bool> {
         use crate::db::schema::{
             channel::dsl as channel_dsl, channel_subreddit::dsl as channel_sub_dsl,
             subreddit::dsl as sub_dsl,
@@ -192,21 +220,6 @@ impl ChannelSubreddit {
             .filter(sub_dsl::subreddit_id.eq(&subreddit.subreddit_id))
             .first::<i64>(conn)
             .map(|count| count > 0)
-    }
-}
-
-impl ChannelSubreddit {
-    pub fn insert(
-        new_relation: &NewChannelSubreddit,
-        conn: &mut SqliteConnection,
-    ) -> Result<ChannelSubreddit, Error> {
-        use crate::db::schema::channel_subreddit::dsl as channel_sub_dsl;
-        diesel::insert_into(channel_sub_dsl::channel_subreddit)
-            .values(new_relation)
-            .execute(conn)?;
-        channel_sub_dsl::channel_subreddit
-            .order(channel_sub_dsl::id.desc())
-            .first::<ChannelSubreddit>(conn)
     }
 }
 

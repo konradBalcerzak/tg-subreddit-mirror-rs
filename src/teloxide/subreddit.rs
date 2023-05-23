@@ -4,7 +4,7 @@ use teloxide::prelude::*;
 
 mod listeners {
     use diesel::SqliteConnection;
-    use roux::Subreddit as SubredditApi;
+    use roux::{subreddit::response::SubredditData, Subreddit as SubredditApi};
     use std::sync::{Arc, Mutex};
     use teloxide::types::Me;
 
@@ -236,8 +236,28 @@ mod listeners {
         .await
     }
 
-    pub(super) async fn on_sub_unlink_sub() -> TeloxideResult {
-        Ok(())
+    pub(super) async fn on_sub_unlink_sub(
+        bot: Bot,
+        dialogue: Dialogue<SupState, AppDialogue>,
+        msg: Message,
+        conn: Arc<Mutex<SqliteConnection>>,
+        channel: Channel,
+    ) -> TeloxideResult {
+        let sub_name = msg.text().unwrap_or_default();
+        let sub_about = SubredditApi::new(sub_name).about().await;
+        if sub_about.is_err() {
+            return msg_reply("Subreddit not found. Try again.", &bot, &msg).await;
+        }
+        let SubredditData { id, .. } = sub_about.unwrap();
+        let subreddit =
+            Subreddit::get_by_sub_id(&id.unwrap_or_default(), &mut conn.lock().unwrap());
+        if subreddit.is_err() {
+            msg_reply("Couldn't unlink: Subreddit not linked.", &bot, &msg).await?;
+            return update_dialogue(&dialogue, SupState::MainMenu).await;
+        }
+        ChannelSubreddit::delete(&channel, &subreddit.unwrap(), &mut conn.lock().unwrap())?;
+        msg_reply("Unlinked the subreddit from the channel.", &bot, &msg).await?;
+        update_dialogue(&dialogue, SupState::MainMenu).await
     }
 }
 
