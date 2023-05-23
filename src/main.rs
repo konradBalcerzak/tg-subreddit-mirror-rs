@@ -14,7 +14,7 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 async fn main() {
     let reddit_bot = reddit_bot::setup_roux(&SETTINGS_INSTANCE.reddit)
         .await
-        .expect("Couldn't instanciate Reddit API connection");
+        .expect("Couldn't instantiate Reddit API connection");
     let db = establish_connection();
     setup_teloxide(reddit_bot, db).await;
 }

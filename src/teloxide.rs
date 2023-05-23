@@ -50,11 +50,27 @@ pub async fn setup_teloxide(reddit_bot: roux::Me, conn: SqliteConnection) {
 }
 
 fn dispatcher_schema() -> DispatcherSchema {
-    dialogue::enter::<Update, dialogue::InMemStorage<State>, State, _>().branch(message_schema())
+    dialogue::enter::<Update, dialogue::InMemStorage<State>, State, _>().branch(
+        Update::filter_message()
+            .branch(channel::schema())
+            .branch(subreddit::schema()),
+    )
 }
 
-fn message_schema() -> DispatcherSchema {
-    Update::filter_message()
-        .branch(channel::schema())
-        .branch(subreddit::schema())
+pub(self) async fn msg_reply<T>(text: T, bot: &Bot, msg: &Message) -> TeloxideResult
+where
+    T: Into<String>,
+{
+    bot.send_message(msg.chat.id, text)
+        .reply_to_message_id(msg.id)
+        .await
+        .map(|_| ())
+        .map_err(|x| x.into())
+}
+
+pub(self) async fn update_dialogue(
+    dialogue: &Dialogue<State, AppDialogue>,
+    state: State,
+) -> TeloxideResult {
+    dialogue.update(state).await.map_err(|x| x.into())
 }

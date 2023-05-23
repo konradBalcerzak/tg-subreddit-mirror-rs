@@ -1,6 +1,6 @@
 use super::{AppDialogue, Command, DispatcherSchema, State as SupState, TeloxideResult};
 use crate::db::models::Channel;
-use teloxide::{dptree::case, prelude::*};
+use teloxide::prelude::*;
 
 mod listeners {
     use diesel::SqliteConnection;
@@ -8,7 +8,10 @@ mod listeners {
     use std::sync::{Arc, Mutex};
     use teloxide::types::Me;
 
-    use crate::db::models::{ChannelSubreddit, NewChannelSubreddit, NewSubreddit, Subreddit};
+    use crate::{
+        db::models::{ChannelSubreddit, NewChannelSubreddit, NewSubreddit, Subreddit},
+        teloxide::{msg_reply, update_dialogue},
+    };
 
     use super::*;
     pub(super) async fn on_sub_link(
@@ -22,33 +25,27 @@ mod listeners {
 
         let from_user = match msg.from() {
             Some(user) => user,
-            None => {
-                bot.send_message(msg.chat.id, "Couldn't recognize the user. Try again.")
-                    .await?;
-                return Ok(());
-            }
+            None => return msg_reply("Couldn't recognize the user. Try again.", &bot, &msg).await,
         };
         let channels = get_channels_where_admins(&bot, conn, &from_user.id, &me.user.id).await?;
         if channels.is_empty() {
-            bot.send_message(
-                msg.chat.id,
+            return msg_reply(
                 "No channels found. Try adding a new channel first",
+                &bot,
+                &msg,
             )
-            .await?;
-            return Ok(());
+            .await;
         }
-        let respond_message =
-            String::from("Got it. Type the ID of the channel you want to unkink:\n\n");
-        bot.send_message(
-            msg.chat.id,
-            respond_message + &channel_list_message(channels)?,
+        msg_reply(
+            format!(
+                "Got it. Type the ID of the channel you want to link:\n\n{}",
+                channel_list_message(channels)?
+            ),
+            &bot,
+            &msg,
         )
-        .reply_to_message_id(msg.id)
         .await?;
-        dialogue
-            .update(SupState::Sub(State::SubLinkRecieveChannel))
-            .await?;
-        Ok(())
+        update_dialogue(&dialogue, SupState::Sub(State::LinkReceiveChannel)).await
     }
 
     pub(super) async fn on_sub_link_channel(
@@ -63,13 +60,12 @@ mod listeners {
         let channel_id: ChatId = match msg.text() {
             Some(text) => ChatId(text.parse()?),
             None => {
-                bot.send_message(
-                    msg.chat.id,
-                    "Please send a message with the id of the channel you wish to unlink",
+                return msg_reply(
+                    "Please send a message with the id of the channel you wish to link",
+                    &bot,
+                    &msg,
                 )
-                .reply_to_message_id(msg.id)
-                .await?;
-                return Ok(());
+                .await;
             }
         };
         let found_channel: Result<Channel, _> = channel
@@ -78,25 +74,25 @@ mod listeners {
         let selected_channel = match found_channel {
             Ok(real_channel) => real_channel,
             Err(_) => {
-                bot.send_message(
-                    msg.chat.id,
+                return msg_reply(
                     "Couldn't find the channel. Please send the of an already linked channel.",
+                    &bot,
+                    &msg,
                 )
-                .reply_to_message_id(msg.id)
-                .await?;
-                return Ok(());
+                .await;
             }
         };
-        bot.send_message(
-            msg.chat.id,
+        msg_reply(
             "Great. Now send the subreddit name (without the preceding /r/ part and without the trailing slashes).",
+            &bot,
+            &msg,
         )
-        .reply_to_message_id(msg.id)
         .await?;
-        dialogue
-            .update(SupState::Sub(State::SubLinkRecieveSub(selected_channel)))
-            .await?;
-        Ok(())
+        update_dialogue(
+            &dialogue,
+            SupState::Sub(State::LinkReceiveSub(selected_channel)),
+        )
+        .await
     }
 
     pub(super) async fn on_sub_link_sub(
@@ -106,81 +102,138 @@ mod listeners {
         conn: Arc<Mutex<SqliteConnection>>,
         selected_channel: Channel,
     ) -> TeloxideResult {
-        let subreddit_name = match msg.text() {
+        let sub_name = match msg.text() {
             Some(text) => text,
-            None => {
-                bot.send_message(msg.chat.id, "Please send a subreddit name.")
-                    .await?;
-                return Ok(());
-            }
+            None => return msg_reply("Please send a subreddit name.", &bot, &msg).await,
         };
-        let subreddit_data = match SubredditApi::new(subreddit_name).about().await {
-            Ok(subreddit_data) => subreddit_data,
+        let sub_data = match SubredditApi::new(sub_name).about().await {
+            Ok(sub_data) => sub_data,
             Err(error) => {
-                bot.send_message(
-                    msg.chat.id,
-                    format!("Error: {}. Try again.", error.to_string()),
-                )
-                .await?;
-                return Ok(());
+                return msg_reply(format!("Error: {}. Try again.", error), &bot, &msg).await
             }
         };
-        let (subreddit_id, subreddit_name) = match (subreddit_data.id, subreddit_data.name) {
+        let (sub_id, sub_name) = match (sub_data.id, sub_data.name) {
             (Some(id), Some(name)) => (id, name),
             _ => {
-                bot.send_message(
-                    msg.chat.id,
-                    "Encountered an error fetching subreddit data. Try again.",
+                return msg_reply(
+                    "Error while fetching subreddit data. Try again.",
+                    &bot,
+                    &msg,
                 )
-                .await?;
-                return Ok(());
+                .await;
             }
         };
-        let db_subreddit =
-            match Subreddit::get_by_subreddit_id(&subreddit_id, &mut *conn.lock().unwrap()) {
-                Ok(db_subreddit) => Ok(db_subreddit),
-                Err(_) => {
-                    let new_subreddit = NewSubreddit {
-                        subreddit_id: &subreddit_id.as_str(),
-                        name: &subreddit_name.as_str(),
-                    };
-                    new_subreddit.insert(&mut *conn.lock().unwrap())
-                }
-            };
-        let db_subreddit = match db_subreddit {
-            Ok(db_subreddit) => db_subreddit,
+        let subreddit = match Subreddit::get_by_sub_id(&sub_id, &mut conn.lock().unwrap()) {
+            Ok(db_subreddit) => Ok(db_subreddit),
             Err(_) => {
-                bot.send_message(
-                    msg.chat.id,
+                let new_subreddit = NewSubreddit {
+                    subreddit_id: sub_id.as_str(),
+                    name: sub_name.as_str(),
+                };
+                new_subreddit.insert(&mut conn.lock().unwrap())
+            }
+        };
+        let subreddit = match subreddit {
+            Ok(subreddit) => subreddit,
+            Err(_) => {
+                return msg_reply(
                     "Error while trying to save the subreddit. Try again.",
+                    &bot,
+                    &msg,
                 )
-                .await?;
-                return Ok(());
+                .await
             }
         };
         let related_channels = ChannelSubreddit::are_related(
             &selected_channel,
-            &db_subreddit,
-            &mut *conn.lock().unwrap(),
+            &subreddit,
+            &mut conn.lock().unwrap(),
         )?;
         if !related_channels {
             ChannelSubreddit::insert(
-                &NewChannelSubreddit::new(&selected_channel, &db_subreddit),
-                &mut *conn.lock().unwrap(),
+                &NewChannelSubreddit::new(&selected_channel, &subreddit),
+                &mut conn.lock().unwrap(),
             )?;
         }
-        bot.send_message(msg.chat.id, "Subreddit successfully linked to the channel.")
-            .await?;
-        dialogue.update(SupState::MainMenu).await?;
-        Ok(())
+        msg_reply("Subreddit successfully linked to the channel.", &bot, &msg).await?;
+        update_dialogue(&dialogue, SupState::MainMenu).await
     }
 
-    pub(super) async fn on_sub_unlink() -> TeloxideResult {
-        Ok(())
+    pub(super) async fn on_sub_unlink(
+        bot: Bot,
+        dialogue: Dialogue<SupState, AppDialogue>,
+        msg: Message,
+        conn: Arc<Mutex<SqliteConnection>>,
+        me: Me,
+    ) -> TeloxideResult {
+        use crate::teloxide::channel::helpers::{channel_list_message, get_channels_where_admins};
+
+        let from_user = match msg.from() {
+            Some(user) => user,
+            None => return msg_reply("Couldn't recognize the user. Try again.", &bot, &msg).await,
+        };
+        let channels = get_channels_where_admins(&bot, conn, &from_user.id, &me.user.id).await?;
+        if channels.is_empty() {
+            return msg_reply(
+                "No channels found. Try adding a new channel first",
+                &bot,
+                &msg,
+            )
+            .await;
+        }
+        msg_reply(
+            format!(
+                "Got it. Type the ID of the channel you want to unlink subreddit from:\n\n{}",
+                channel_list_message(channels)?
+            ),
+            &bot,
+            &msg,
+        )
+        .await?;
+        update_dialogue(&dialogue, SupState::Sub(State::UnlinkReceiveChannel)).await
     }
 
-    pub(super) async fn on_sub_unlink_channel() -> TeloxideResult {
-        Ok(())
+    pub(super) async fn on_sub_unlink_channel(
+        bot: Bot,
+        dialogue: Dialogue<SupState, AppDialogue>,
+        msg: Message,
+        conn: Arc<Mutex<SqliteConnection>>,
+    ) -> TeloxideResult {
+        let channel_id: ChatId = match msg.text() {
+            Some(text) => ChatId(text.parse()?),
+            None => {
+                return msg_reply(
+                    "Please send a message with the id of the channel you wish to unlink",
+                    &bot,
+                    &msg,
+                )
+                .await
+            }
+        };
+        let channel = Channel::get_by_chat_id(channel_id, &mut conn.lock().unwrap());
+        let selected_channel = match channel {
+            Ok(real_channel) => real_channel,
+            Err(_) => {
+                return msg_reply(
+                    "Couldn't find the channel. Please send the of an already linked channel.",
+                    &bot,
+                    &msg,
+                )
+                .await;
+            }
+        };
+
+        msg_reply(
+            "Great. Now send the subreddit name (without the preceding /r/ part and without the trailing slashes).",
+            &bot,
+            &msg,
+        )
+        .await?;
+        update_dialogue(
+            &dialogue,
+            SupState::Sub(State::UnlinkReceiveSub(selected_channel)),
+        )
+        .await
     }
 
     pub(super) async fn on_sub_unlink_sub() -> TeloxideResult {
@@ -189,14 +242,15 @@ mod listeners {
 }
 
 #[derive(Clone)]
-pub(super) enum State {
-    SubLinkRecieveChannel,
-    SubLinkRecieveSub(Channel),
-    SubUnlinkRecieveChannel,
-    SubUnlinkRecieveSub(Channel),
+pub(crate) enum State {
+    LinkReceiveChannel,
+    LinkReceiveSub(Channel),
+    UnlinkReceiveChannel,
+    UnlinkReceiveSub(Channel),
 }
 
 pub fn schema() -> DispatcherSchema {
+    use dptree::case;
     Update::filter_message()
         .branch(
             case![SupState::MainMenu]
@@ -206,19 +260,16 @@ pub fn schema() -> DispatcherSchema {
         )
         .branch(
             case![SupState::Sub(x)]
+                .branch(case![State::LinkReceiveChannel].endpoint(listeners::on_sub_link_channel))
                 .branch(
-                    case![State::SubLinkRecieveChannel].endpoint(listeners::on_sub_link_channel),
-                )
-                .branch(
-                    case![State::SubLinkRecieveSub(selected_channel)]
+                    case![State::LinkReceiveSub(selected_channel)]
                         .endpoint(listeners::on_sub_link_sub),
                 )
                 .branch(
-                    case![State::SubUnlinkRecieveChannel]
-                        .endpoint(listeners::on_sub_unlink_channel),
+                    case![State::UnlinkReceiveChannel].endpoint(listeners::on_sub_unlink_channel),
                 )
                 .branch(
-                    case![State::SubLinkRecieveSub(selected_channel)]
+                    case![State::LinkReceiveSub(selected_channel)]
                         .endpoint(listeners::on_sub_unlink_sub),
                 ),
         )

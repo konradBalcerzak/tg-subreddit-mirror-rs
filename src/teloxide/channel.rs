@@ -47,10 +47,10 @@ pub mod helpers {
                 available_channels.push(channel_id);
             }
         }
-        let available_channels = channel
+        channel
             .filter(chat_id.eq_any(available_channels))
-            .load::<Channel>(&mut *conn.lock().unwrap())?;
-        return Ok(available_channels);
+            .load::<Channel>(&mut *conn.lock().unwrap())
+            .map_err(|x| x.into())
     }
 }
 
@@ -58,7 +58,7 @@ mod listeners {
     use super::*;
     use crate::{
         db::models::NewChannel,
-        teloxide::{AppDialogue, State as SupState, TeloxideResult},
+        teloxide::{msg_reply, update_dialogue, AppDialogue, State as SupState, TeloxideResult},
     };
     use teloxide::{
         types::{Me, Message},
@@ -70,13 +70,8 @@ mod listeners {
         dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
     ) -> TeloxideResult {
-        bot.send_message(msg.chat.id, "Got it. Forward a message from the channel here.\n Remember that this bot needs to be an administrator in that channel first.")
-        .reply_to_message_id(msg.id)
-        .await?;
-        dialogue
-            .update(SupState::Channel(State::LinkRecieveChannel))
-            .await?;
-        Ok(())
+        msg_reply("Got it. Forward a message from the channel here.\n Remember that this bot needs to be an administrator in that channel first.", &bot, &msg).await?;
+        update_dialogue(&dialogue, SupState::Channel(State::LinkReceiveChannel)).await
     }
 
     pub(super) async fn on_channel_link_msg(
@@ -89,54 +84,54 @@ mod listeners {
         let forward_chat = match msg.forward_from_chat() {
             Some(chat) => chat,
             None => {
-                bot.send_message(
-                    msg.chat.id,
+                return msg_reply(
                     format!(
                         "This message is not a forward. Try again or use command /cancel@{}",
                         me.username()
                     ),
+                    &bot,
+                    &msg,
                 )
-                .reply_to_message_id(msg.id)
-                .await?;
-                return Ok(());
+                .await
             }
         };
         if !forward_chat.is_channel() {
-            bot.send_message(
-                msg.chat.id,
-                format!(
-                "This message is not forwarded from a channel. Try again or use command /cancel@{}",
-                me.username()
-            ),
-            )
-            .reply_to_message_id(msg.id)
-            .await?;
-            return Ok(());
+            return msg_reply(
+                    format!(
+                        "This message is not forwarded from a channel. Try again or use command /cancel@{}",
+                        me.username()
+                    ),
+                    &bot,
+                    &msg,
+                )
+                .await;
         }
         let chat_admins = bot.get_chat_administrators(forward_chat.id).await?;
         if !chat_admins.iter().any(|admin| admin.user.id == me.id) {
-            bot.send_message(msg.chat.id, format!("This bot is not an administrator in this channel. Try again or use command /cancel@{}", me.username()))
-            .reply_to_message_id(msg.id)
-            .await?;
-            return Ok(());
+            return msg_reply(
+                    format!("This bot is not an administrator in this channel. Try again or use command /cancel@{}", me.username()),
+                    &bot,
+                    &msg,
+                )
+                .await;
         }
-        let new_channel = NewChannel {
-            chat_id: forward_chat.id.0,
-            title: forward_chat.title().unwrap_or_default(),
-            username: forward_chat.username(),
-            invite_link: forward_chat.invite_link(),
-        };
-        let new_channel = new_channel.insert(&mut *conn.lock().unwrap())?;
-        bot.send_message(
-            msg.chat.id,
+        let new_channel: NewChannel = NewChannel::new(
+            forward_chat.id.0,
+            forward_chat.title().unwrap_or_default(),
+            forward_chat.username(),
+            forward_chat.invite_link(),
+        );
+        let channel = new_channel.insert(&mut conn.lock().unwrap())?;
+        msg_reply(
             format!(
                 "Added the channel {} (id: {}). Now you can add subreddits to this channel.",
-                new_channel.title, new_channel.chat_id
+                channel.title, channel.chat_id
             ),
+            &bot,
+            &msg,
         )
         .await?;
-        dialogue.update(SupState::MainMenu).await?;
-        return Ok(());
+        update_dialogue(&dialogue, SupState::MainMenu).await
     }
 
     pub(super) async fn on_channel_unlink(
@@ -150,23 +145,19 @@ mod listeners {
 
         let from_user = match msg.from() {
             Some(user) => user,
-            None => {
-                bot.send_message(msg.chat.id, "Couldn't recognize the user. Try again.")
-                    .await?;
-                return Ok(());
-            }
+            None => return msg_reply("Couldn't recognize the user. Try again.", &bot, &msg).await,
         };
         let channels = get_channels_where_admins(&bot, conn, &from_user.id, &me.user.id).await?;
-        let select_channel_msg =
-            String::from("Okay. Type the ID of the channel you want to unkink:\n\n")
-                + channel_list_message(channels)?.as_str();
-        bot.send_message(msg.chat.id, select_channel_msg)
-            .reply_to_message_id(msg.id)
-            .await?;
-        dialogue
-            .update(SupState::Channel(State::UnlinkRecieveChannel))
-            .await?;
-        Ok(())
+        msg_reply(
+            format!(
+                "Okay. Type the ID of the channel you want to unlink:\n\n{}",
+                channel_list_message(channels)?
+            ),
+            &bot,
+            &msg,
+        )
+        .await?;
+        update_dialogue(&dialogue, SupState::Channel(State::UnlinkReceiveChannel)).await
     }
 
     pub(super) async fn on_channel_unlink_msg(
@@ -175,49 +166,39 @@ mod listeners {
         msg: Message,
         conn: Arc<Mutex<SqliteConnection>>,
     ) -> TeloxideResult {
-        use crate::db::schema::channel::dsl::*;
-        use diesel::prelude::*;
-
         let channel_id: ChatId = match msg.text() {
             Some(text) => ChatId(text.parse()?),
             None => {
-                bot.send_message(
-                    msg.chat.id,
+                return msg_reply(
                     "Please send a message with the id of the channel you wish to unlink",
+                    &bot,
+                    &msg,
                 )
-                .reply_to_message_id(msg.id)
-                .await?;
-                return Ok(());
+                .await;
             }
         };
-        let found_channel: Result<Channel, _> = channel
-            .filter(chat_id.eq(channel_id.0))
-            .first(&mut *conn.lock().unwrap());
-        let selected_channel = match found_channel {
-            Ok(real_channel) => real_channel,
+        let channel = Channel::get_by_chat_id(channel_id, &mut conn.lock().unwrap());
+        let channel = match channel {
+            Ok(channel) => channel,
             Err(_) => {
-                bot.send_message(
-                    msg.chat.id,
+                return msg_reply(
                     "Couldn't find the channel. Please send the of an already linked channel.",
+                    &bot,
+                    &msg,
                 )
-                .reply_to_message_id(msg.id)
-                .await?;
-                return Ok(());
+                .await;
             }
         };
-        bot.send_message(
-            msg.chat.id,
+        msg_reply(
             format!(
                 "Are you sure you want to remove channel \"{}\" (Id: {})? Type the channel title to remove it",
-                selected_channel.title, selected_channel.chat_id
+                channel.title, channel.chat_id
             ),
+            &bot,
+            &msg,
         )
-        .reply_to_message_id(msg.id)
         .await?;
-        dialogue
-            .update(SupState::Channel(State::UnlinkConfirm(selected_channel)))
-            .await?;
-        Ok(())
+        update_dialogue(&dialogue, SupState::Channel(State::UnlinkConfirm(channel))).await
     }
 
     pub(super) async fn on_channel_unlink_confirm(
@@ -225,32 +206,23 @@ mod listeners {
         dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
         conn: Arc<Mutex<SqliteConnection>>,
-        selected_channel: Channel,
+        channel: Channel,
     ) -> TeloxideResult {
-        use crate::db::schema::channel::dsl::*;
-        use diesel::prelude::*;
-        if msg.text().unwrap_or("") != selected_channel.title {
-            bot.send_message(msg.chat.id, "Cancelled unlinking channel.")
-                .reply_to_message_id(msg.id)
-                .await?;
-            dialogue.update(SupState::MainMenu).await?;
-            return Ok(());
+        if msg.text().unwrap_or("") != channel.title {
+            return msg_reply("Cancelled unlinking channel.", &bot, &msg).await;
         }
-        let deleted_rows = diesel::delete(channel)
-            .filter(chat_id.eq(selected_channel.chat_id))
-            .execute(&mut *conn.lock().unwrap())?;
-        bot.send_message(
-            msg.chat.id,
+        let deleted_rows = Channel::delete(channel.chat_id, &mut conn.lock().unwrap())?;
+        msg_reply(
             if deleted_rows != 0 {
                 "Successfully unlinked channel."
             } else {
                 "Sorry, I couldn't unlink the channel. Try again later."
             },
+            &bot,
+            &msg,
         )
-        .reply_to_message_id(msg.id)
         .await?;
-        dialogue.update(SupState::MainMenu).await?;
-        Ok(())
+        update_dialogue(&dialogue, SupState::MainMenu).await
     }
 
     pub(super) async fn on_channel_list(
@@ -263,24 +235,17 @@ mod listeners {
 
         let user_id = match msg.from() {
             Some(user) => user.id,
-            None => {
-                bot.send_message(msg.chat.id, "Couldn't recognize the user. Try again.")
-                    .await?;
-                return Ok(());
-            }
+            None => return msg_reply("Couldn't recognize the user. Try again.", &bot, &msg).await,
         };
         let channels = get_channels_where_admins(&bot, conn, &user_id, &me.user.id).await?;
-        bot.send_message(msg.chat.id, channel_list_message(channels)?)
-            .reply_to_message_id(msg.id)
-            .await?;
-        Ok(())
+        msg_reply(channel_list_message(channels)?, &bot, &msg).await
     }
 }
 
 #[derive(Clone)]
 pub enum State {
-    LinkRecieveChannel,
-    UnlinkRecieveChannel,
+    LinkReceiveChannel,
+    UnlinkReceiveChannel,
     UnlinkConfirm(Channel),
 }
 
@@ -298,9 +263,9 @@ pub fn schema() -> DispatcherSchema {
         )
         .branch(
             case![SupState::Channel(x)]
-                .branch(case![State::LinkRecieveChannel].endpoint(listeners::on_channel_link_msg))
+                .branch(case![State::LinkReceiveChannel].endpoint(listeners::on_channel_link_msg))
                 .branch(
-                    case![State::UnlinkRecieveChannel].endpoint(listeners::on_channel_unlink_msg),
+                    case![State::UnlinkReceiveChannel].endpoint(listeners::on_channel_unlink_msg),
                 )
                 .branch(
                     case![State::UnlinkConfirm(selected_channel)]

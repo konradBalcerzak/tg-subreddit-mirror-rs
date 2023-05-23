@@ -1,16 +1,14 @@
-use std::env;
-use config::{Config, File, Environment, ConfigError};
+use config::{Config, ConfigError, Environment, File};
 use once_cell::sync::Lazy;
 use serde_derive::Deserialize;
+use std::env;
 
 impl Settings {
     pub fn from_config_file() -> Result<Self, ConfigError> {
         let args = env::args();
         let args: Vec<String> = args.collect();
         let default_filename = "tg-subreddit-mirror.toml".to_owned();
-        let filename = args
-            .get(1)
-            .unwrap_or(&default_filename);
+        let filename = args.get(1).unwrap_or(&default_filename);
         // Build the configuration
         let app_config = Config::builder()
             .add_source(File::with_name(filename))
@@ -49,11 +47,12 @@ pub struct DatabaseConf {
     pub url: String,
 }
 
-pub static SETTINGS_INSTANCE: Lazy<Settings> = Lazy::new(|| Settings::from_config_file().expect("Couldn't load app configuration"));
+pub static SETTINGS_INSTANCE: Lazy<Settings> =
+    Lazy::new(|| Settings::from_config_file().expect("Couldn't load app configuration"));
 
 #[derive(Deserialize, Debug)]
 pub struct Settings {
     pub teloxide: TeloxideConf,
     pub reddit: RedditConf,
-    pub database: DatabaseConf
+    pub database: DatabaseConf,
 }
