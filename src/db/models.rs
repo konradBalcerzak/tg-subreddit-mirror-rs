@@ -1,7 +1,9 @@
 use super::schema::*;
 use diesel::{
     deserialize::{FromSql, FromSqlRow},
+    dsl::count,
     prelude::*,
+    result::Error,
     sql_types::{self, Text},
     sqlite::{Sqlite, SqliteValue},
 };
@@ -15,6 +17,26 @@ pub struct Channel {
     pub title: String,
     pub username: Option<String>,
     pub invite_link: Option<String>,
+}
+
+impl Channel {
+    pub fn get_by_chat_id(chat_id: i64, conn: &mut SqliteConnection) -> Result<Channel, Error> {
+        use crate::db::schema::channel::dsl as channel_dsl;
+        channel_dsl::channel
+            .filter(channel_dsl::chat_id.eq(&chat_id))
+            .first::<Channel>(conn)
+    }
+    pub fn get_by_subreddit(
+        related_subreddit: Subreddit,
+        conn: &mut SqliteConnection,
+    ) -> Result<Vec<Channel>, Error> {
+        use crate::db::schema::channel::dsl as channel_dsl;
+        use diesel::prelude::*;
+        ChannelSubreddit::belonging_to(&related_subreddit)
+            .inner_join(channel_dsl::channel)
+            .select(Channel::as_select())
+            .load(conn)
+    }
 }
 
 #[derive(Insertable)]
@@ -75,11 +97,34 @@ pub struct Subreddit {
     pub medias_only: bool,
 }
 
+impl Subreddit {
+    pub fn get_by_subreddit_id(
+        subreddit_id: &String,
+        conn: &mut SqliteConnection,
+    ) -> Result<Subreddit, Error> {
+        use crate::db::schema::subreddit::dsl as sub_dsl;
+        sub_dsl::subreddit
+            .filter(sub_dsl::subreddit_id.eq(&subreddit_id))
+            .first::<Subreddit>(conn)
+    }
+    pub fn get_by_channel_id(
+        related_channel: Channel,
+        conn: &mut SqliteConnection,
+    ) -> Result<Vec<Subreddit>, Error> {
+        use crate::db::schema::subreddit::dsl as sub_dsl;
+        use diesel::prelude::*;
+        ChannelSubreddit::belonging_to(&related_channel)
+            .inner_join(sub_dsl::subreddit)
+            .select(Subreddit::as_select())
+            .load(conn)
+    }
+}
+
 #[derive(Insertable)]
 #[diesel(table_name = subreddit)]
 pub struct NewSubreddit<'a> {
-    subreddit_id: &'a str,
-    name: &'a str,
+    pub subreddit_id: &'a str,
+    pub name: &'a str,
 }
 
 impl<'a> NewSubreddit<'a> {
@@ -91,11 +136,63 @@ impl<'a> NewSubreddit<'a> {
 }
 
 #[derive(Identifiable, Selectable, Queryable, Associations, Debug)]
-#[diesel(belongs_to(Channel))]
 #[diesel(belongs_to(Subreddit))]
+#[diesel(belongs_to(Channel))]
 #[diesel(table_name = channel_subreddit)]
 pub struct ChannelSubreddit {
     pub id: Option<i32>,
     pub channel_id: i32,
     pub subreddit_id: i32,
+}
+
+impl ChannelSubreddit {
+    pub fn are_related(
+        channel: &Channel,
+        subreddit: &Subreddit,
+        conn: &mut SqliteConnection,
+    ) -> Result<bool, Error> {
+        use crate::db::schema::{
+            channel::dsl as channel_dsl, channel_subreddit::dsl as channel_sub_dsl,
+            subreddit::dsl as sub_dsl,
+        };
+        channel_sub_dsl::channel_subreddit
+            .inner_join(channel_dsl::channel)
+            .inner_join(sub_dsl::subreddit)
+            .select(count(channel_dsl::chat_id))
+            .filter(channel_dsl::chat_id.eq(channel.chat_id))
+            .filter(sub_dsl::subreddit_id.eq(&subreddit.subreddit_id))
+            .first::<i64>(conn)
+            .map(|count| count > 0)
+    }
+}
+
+impl ChannelSubreddit {
+    pub fn insert(
+        new_relation: &NewChannelSubreddit,
+        conn: &mut SqliteConnection,
+    ) -> Result<ChannelSubreddit, Error> {
+        use crate::db::schema::channel_subreddit::dsl as channel_sub_dsl;
+        diesel::insert_into(channel_sub_dsl::channel_subreddit)
+            .values(new_relation)
+            .execute(conn)?;
+        channel_sub_dsl::channel_subreddit
+            .order(channel_sub_dsl::id.desc())
+            .first::<ChannelSubreddit>(conn)
+    }
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = channel_subreddit)]
+pub struct NewChannelSubreddit {
+    channel_id: i32,
+    subreddit_id: i32,
+}
+
+impl NewChannelSubreddit {
+    pub fn new(channel: &Channel, subreddit: &Subreddit) -> Self {
+        NewChannelSubreddit {
+            channel_id: channel.id,
+            subreddit_id: subreddit.id,
+        }
+    }
 }

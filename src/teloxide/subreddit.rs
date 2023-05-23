@@ -4,22 +4,14 @@ use teloxide::{dptree::case, prelude::*};
 
 mod listeners {
     use diesel::SqliteConnection;
+    use roux::Subreddit as SubredditApi;
     use std::sync::{Arc, Mutex};
     use teloxide::types::Me;
 
+    use crate::db::models::{ChannelSubreddit, NewChannelSubreddit, NewSubreddit, Subreddit};
+
     use super::*;
     pub(super) async fn on_sub_link(
-        _: Bot,
-        dialogue: Dialogue<SupState, AppDialogue>,
-        _: Message,
-    ) -> TeloxideResult {
-        dialogue
-            .update(SupState::Sub(State::SubLinkRecieveChannel))
-            .await?;
-        Ok(())
-    }
-
-    pub(super) async fn on_sub_link_channel(
         bot: Bot,
         dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
@@ -59,7 +51,7 @@ mod listeners {
         Ok(())
     }
 
-    pub(super) async fn on_sub_link_sub(
+    pub(super) async fn on_sub_link_channel(
         bot: Bot,
         dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
@@ -107,36 +99,91 @@ mod listeners {
         Ok(())
     }
 
-    pub(super) async fn on_sub_unlink(
+    pub(super) async fn on_sub_link_sub(
         bot: Bot,
         dialogue: Dialogue<SupState, AppDialogue>,
         msg: Message,
         conn: Arc<Mutex<SqliteConnection>>,
         selected_channel: Channel,
     ) -> TeloxideResult {
-        dialogue
-            .update(SupState::Sub(State::SubUnlinkRecieveChannel))
+        let subreddit_name = match msg.text() {
+            Some(text) => text,
+            None => {
+                bot.send_message(msg.chat.id, "Please send a subreddit name.")
+                    .await?;
+                return Ok(());
+            }
+        };
+        let subreddit_data = match SubredditApi::new(subreddit_name).about().await {
+            Ok(subreddit_data) => subreddit_data,
+            Err(error) => {
+                bot.send_message(
+                    msg.chat.id,
+                    format!("Error: {}. Try again.", error.to_string()),
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let (subreddit_id, subreddit_name) = match (subreddit_data.id, subreddit_data.name) {
+            (Some(id), Some(name)) => (id, name),
+            _ => {
+                bot.send_message(
+                    msg.chat.id,
+                    "Encountered an error fetching subreddit data. Try again.",
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let db_subreddit =
+            match Subreddit::get_by_subreddit_id(&subreddit_id, &mut *conn.lock().unwrap()) {
+                Ok(db_subreddit) => Ok(db_subreddit),
+                Err(_) => {
+                    let new_subreddit = NewSubreddit {
+                        subreddit_id: &subreddit_id.as_str(),
+                        name: &subreddit_name.as_str(),
+                    };
+                    new_subreddit.insert(&mut *conn.lock().unwrap())
+                }
+            };
+        let db_subreddit = match db_subreddit {
+            Ok(db_subreddit) => db_subreddit,
+            Err(_) => {
+                bot.send_message(
+                    msg.chat.id,
+                    "Error while trying to save the subreddit. Try again.",
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let related_channels = ChannelSubreddit::are_related(
+            &selected_channel,
+            &db_subreddit,
+            &mut *conn.lock().unwrap(),
+        )?;
+        if !related_channels {
+            ChannelSubreddit::insert(
+                &NewChannelSubreddit::new(&selected_channel, &db_subreddit),
+                &mut *conn.lock().unwrap(),
+            )?;
+        }
+        bot.send_message(msg.chat.id, "Subreddit successfully linked to the channel.")
             .await?;
-        Ok(())
-    }
-
-    pub(super) async fn on_sub_unlink_channel(
-        _: Bot,
-        dialogue: Dialogue<SupState, AppDialogue>,
-        _: Message,
-    ) -> TeloxideResult {
-        dialogue
-            .update(SupState::Sub(State::SubUnlinkRecieveChannel))
-            .await?;
-        Ok(())
-    }
-
-    pub(super) async fn on_sub_unlink_sub(
-        _: Bot,
-        dialogue: Dialogue<SupState, AppDialogue>,
-        _: Message,
-    ) -> TeloxideResult {
         dialogue.update(SupState::MainMenu).await?;
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_unlink() -> TeloxideResult {
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_unlink_channel() -> TeloxideResult {
+        Ok(())
+    }
+
+    pub(super) async fn on_sub_unlink_sub() -> TeloxideResult {
         Ok(())
     }
 }

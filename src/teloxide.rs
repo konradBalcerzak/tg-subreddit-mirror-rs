@@ -3,14 +3,14 @@ mod subreddit;
 
 use std::sync::{Arc, Mutex};
 
-use roux::Reddit;
+use diesel::SqliteConnection;
 use teloxide::{
     dispatching::{dialogue, UpdateHandler},
     macros::BotCommands,
     prelude::*,
 };
 
-use crate::{db::establish_connection, settings::SETTINGS_INSTANCE};
+use crate::settings::SETTINGS_INSTANCE;
 
 #[derive(Clone, Default)]
 pub(self) enum State {
@@ -39,14 +39,13 @@ pub(self) type DispatcherSchema = UpdateHandler<Box<dyn std::error::Error + Send
 pub(self) type TeloxideResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 pub(self) type AppDialogue = teloxide::dispatching::dialogue::InMemStorage<State>;
 
-pub async fn setup_teloxide(redditBot: Reddit) {
-    let conn = Arc::new(Mutex::new(establish_connection()));
+pub async fn setup_teloxide(reddit_bot: roux::Me, conn: SqliteConnection) {
     pretty_env_logger::init();
     let bot = Bot::new(&SETTINGS_INSTANCE.teloxide.token);
     let dispatcher = Dispatcher::builder(bot, dispatcher_schema()).dependencies(dptree::deps![
         dialogue::InMemStorage::<State>::new(),
-        conn,
-        redditBot
+        Arc::new(Mutex::new(conn)),
+        Arc::new(Mutex::new(reddit_bot))
     ]);
 }
 
